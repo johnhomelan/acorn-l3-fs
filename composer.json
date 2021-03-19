@@ -1,6 +1,6 @@
 
 {
-    "name": "homelan/L3fsReader",
+    "name": "homelan/l3fsReader",
     "description": "Provides class for reading disk images from the Acorn Econet level 3 fileserver, and the Acorn Econet filestore.",
     "keywords": ["afs","econet level 3","econet filestore" ],
     "license": "MIT",
