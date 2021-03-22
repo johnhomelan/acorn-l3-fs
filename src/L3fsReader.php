@@ -4,7 +4,9 @@
  *
 */
 
-namespace \HomeLan\Retro\Acorn\Disk;
+namespace HomeLan\Retro\Acorn\Disk;
+
+use \Exception;
 
 class L3fsReader {
 
@@ -38,6 +40,8 @@ class L3fsReader {
 	private $aCatalogue = NULL;
 
 	private $bInterleaved = false;
+
+	private $iNfsPartitionStart = NULL;
 
 	/**
 	 * Creates a new instance of the reader
