@@ -24,16 +24,20 @@ L3fsReader Usage
 
 Creating a L3fsReader Object to directly open a file on disk
 
+```
 $oAfs = new \HomeLan\Retro\Acorn\Disk\L3fsReader('l3_disk_image.img');
+```
 
 Once the L3fsReader object exists a few simple methods can be used to read data from it.
 
+```
 $oAdfs->getCatalogue()
+```
 
 Gets the catalogue of what is on the disk *CAT
 
 e.g. 
-
+```
 $aCatalogue = $oAdfs->getCatalogue();
 foreach($aCatalogue as $sDirectoy=>$aDir)
 {
@@ -46,35 +50,40 @@ foreach($aCatalogue as $sDirectoy=>$aDir)
 
 
 $oAfs->getFile('$.!BOOT');
+```
 
 The the contents of a give file 
 
 e.g.
-
+```
 $sFileContents = $oAdfs->getFile('$.!BOOT');
 
 
 $oAdfs->getStat('$.!BOOT');
+```
 
 Stats a file 
 
-
+```
 $oAfs->isFile('$.!BOOT');
+```
 
 Test if a given path is a file or not
 
 e.g.
-
+```
 $bFile = $oAfs->isFile('$.!BOOT');
 if($bFile){
 	echo "!BOOT is file.\n" 
 }
 
 $oAfs->isDir('A');
+```
 
 Test if a given path is a file or not
-
+```
 $bDir = $oAfs->isDir('D');
 if($bDir){
 	echo "D is a dir.\n" 
 }
+```
