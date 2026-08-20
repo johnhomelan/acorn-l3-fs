@@ -6,7 +6,7 @@
 
 namespace HomeLan\Retro\Acorn\Disk;
 
-use \Exception;
+use Exception;
 
 class L3fsReader {
 
@@ -40,8 +40,6 @@ class L3fsReader {
 	private $aCatalogue = NULL;
 
 	private $bInterleaved = false;
-
-	private $iNfsPartitionStart = NULL;
 
 	/**
 	 * Creates a new instance of the reader
@@ -607,7 +605,7 @@ class L3fsReader {
 					}
 				}
 				if($bFound){
-					if($aCat[$sPart]['type']=='dir'){
+					if($aCat[$sTestKey]['type']=='dir'){
 						$aCat = $aCat[$sTestKey]['dir'];
 					}else{
 						return false;
@@ -645,7 +643,7 @@ class L3fsReader {
 				}
 			}
 			if($bFound){
-				if($aCat[$sPart]['type']=='dir'){
+				if($aCat[$sTestKey]['type']=='dir'){
 					$aCat = $aCat[$sTestKey]['dir'];
 				}else{
 					return false;
