@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit bootstrap="unit-tests/bootstrap.php"
+         colors="true"
+         beStrictAboutOutputDuringTests="true">
+	<testsuites>
+		<testsuite name="L3fsReader">
+			<directory>unit-tests</directory>
+		</testsuite>
+	</testsuites>
+</phpunit>
