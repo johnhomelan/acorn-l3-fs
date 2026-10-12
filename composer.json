@@ -1,8 +1,11 @@
-
 {
     "name": "homelan/l3fsreader",
     "description": "Provides class for reading disk images from the Acorn Econet level 3 fileserver, and the Acorn Econet filestore.",
-    "keywords": ["afs","econet level 3","econet filestore" ],
+    "keywords": [
+        "afs",
+        "econet level 3",
+        "econet filestore"
+    ],
     "license": "MIT",
     "authors": [
         {
@@ -12,11 +15,22 @@
     ],
     "type": "project",
     "require": {
-		"php": ">=7.1"
+        "php": ">=7.1"
     },
     "autoload": {
         "psr-4": {
             "HomeLan\\Retro\\Acorn\\Disk\\": "src/"
         }
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^9.6 || ^10.5 || ^11.5 || ^12.0"
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "HomeLan\\Retro\\Acorn\\Disk\\Tests\\": "unit-tests/"
+        }
+    },
+    "scripts": {
+        "test": "phpunit --configuration phpunit.xml.dist"
     }
 }

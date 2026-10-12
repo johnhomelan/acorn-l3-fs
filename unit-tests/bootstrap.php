@@ -15,6 +15,9 @@ if(!class_exists('HomeLan\Retro\Acorn\Disk\L3fsReader')){
 if(!class_exists('HomeLan\Retro\Acorn\Disk\L3fsRecovery')){
 	require_once(__DIR__.'/../src/L3fsRecovery.php');
 }
+if(!class_exists('HomeLan\Retro\Acorn\Disk\L3fsWriter')){
+	require_once(__DIR__.'/../src/L3fsWriter.php');
+}
 if(!class_exists('HomeLan\Retro\Acorn\Disk\L3fsTarExporter')){
 	require_once(__DIR__.'/../src/L3fsTarExporter.php');
 }

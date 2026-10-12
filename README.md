@@ -109,6 +109,37 @@ Objects that can not be placed in the tree are put in a directory named Lost+Fou
 
 getRecoveryReport() returns counts of what was found and a list of the problems met.  The on disk format, and the checks the recovery relies on, are described in docs/afs-disc-format.md
 
+L3fsWriter Usage
+----------------
+
+The L3fsWriter class extends L3fsReader, adding methods that alter the disk image.  The free space bitmaps, the allocation maps and the directories (with their sequence numbers) are all kept in step.  Only hard disk images (one bitmap sector per cylinder) can be written to.
+
+```
+$oAfs = new \HomeLan\Retro\Acorn\Disk\L3fsWriter('l3_disk_image.img');
+
+//Writes a file, replacing any existing file of the same name.  The load address, execute address, access and date are optional
+$oAfs->putFile('$.Library.Fred', $sFileContents, 0xFFFF1900, 0xFFFF8023, L3fsWriter::ACCESS_OWNER_READ | L3fsWriter::ACCESS_OWNER_WRITE);
+
+$oAfs->makeDirectory('$.Library.Games');
+
+//Changes the load address, execute address and access, NULL leaves a value as it is
+$oAfs->setAttributes('$.Library.Fred', NULL, NULL, L3fsWriter::ACCESS_OWNER_READ);
+
+//Deletes a file or an empty directory
+$oAfs->delete('$.Library.Fred');
+
+//Free space in bytes
+$iFree = $oAfs->getFreeSpace();
+```
+
+Each method either completes or throws an exception leaving the image exactly as it was (e.g. "Disk full").  Locked files must be unlocked with setAttributes() before they can be replaced or deleted.
+
+Before writing to an image taken from a real disk it is worth calling checkFreeSpaceMap(), which compares the bitmaps with the sectors used by everything reachable from the root directory.  If 'in_use_but_free' or 'cross_linked' are not empty the bitmaps can not be trusted, and writing may overwrite existing files.
+
+```
+$aCheck = $oAfs->checkFreeSpaceMap();
+```
+
 Tests
 -----
 
