@@ -31,14 +31,14 @@ $oAfs = new \HomeLan\Retro\Acorn\Disk\L3fsReader('l3_disk_image.img');
 Once the L3fsReader object exists a few simple methods can be used to read data from it.
 
 ```
-$oAdfs->getCatalogue()
+$oAfs->getCatalogue()
 ```
 
 Gets the catalogue of what is on the disk *CAT
 
 e.g. 
 ```
-$aCatalogue = $oAdfs->getCatalogue();
+$aCatalogue = $oAfs->getCatalogue();
 foreach($aCatalogue as $sDirectoy=>$aDir)
 {
 	echo $sDirectoy."\n==============\n";
@@ -56,10 +56,10 @@ The the contents of a give file
 
 e.g.
 ```
-$sFileContents = $oAdfs->getFile('$.!BOOT');
+$sFileContents = $oAfs->getFile('$.!BOOT');
 
 
-$oAdfs->getStat('$.!BOOT');
+$oAfs->getStat('$.!BOOT');
 ```
 
 Stats a file 
@@ -87,3 +87,33 @@ if($bDir){
 	echo "D is a dir.\n" 
 }
 ```
+
+L3fsRecovery Usage
+------------------
+
+The L3fsRecovery class extends L3fsReader, and is for disk images taken from failing disks where the sectors that could not be read contain only zero bytes.  Rather than starting at the root directory it reads every sector looking for metadata, and builds the best directory tree it can from what survives, even if the root directory has been lost.
+
+```
+$oAfs = new \HomeLan\Retro\Acorn\Disk\L3fsRecovery('damaged_disk_image.img');
+$aCatalogue = $oAfs->getCatalogue();
+$aReport = $oAfs->getRecoveryReport();
+```
+
+The catalogue has the same format as the one from L3fsReader, and getFile(), getStat(), isFile() and isDir() all work on the recovered tree.  Each entry has an extra 'recovery' key holding
+
+* source - how the entry was found: 'entry' (the normal chain of directory entries), 'salvaged' (found in a slot of a damaged directory), 'parent-pointer' (a directory placed using the pointer it holds to its parent), 'orphan' (nothing says where it belongs) or 'fake' (a directory made up to hold other entries)
+* status - 'ok', 'suspect' (a file with sectors that are all zero bytes, or a damaged map), 'damaged' (a directory with parts missing), 'lost' (the entry survives but the object does not) or 'fake'
+* zero_sectors - the number of sectors of the object that contain only zero bytes
+
+Objects that can not be placed in the tree are put in a directory named Lost+Found in the root, with names made from their SIN (e.g. file-14199).
+
+getRecoveryReport() returns counts of what was found and a list of the problems met.  The on disk format, and the checks the recovery relies on, are described in docs/afs-disc-format.md
+
+Tests
+-----
+
+```
+make test
+```
+
+Runs the phpunit tests in unit-tests/, which build small synthetic disk images to test against.
