@@ -14,32 +14,37 @@ class L3fsReader {
 	const SECTOR_SIZE = 256;
 	const FILE_NAME_LEN = 10;	
 	const METADATA_SIZE = 26;
+	const DIR_HEADER_SIZE = 17;
+	//Each map block has 49 five byte entries, the last of which is the link to the next map block
+	const MAP_ENTRIES = 49;
 
-	private $sImagePath = NULL;
+	protected $sImagePath = NULL;
 
-	private $sTitle = NULL;
+	protected $iNfsPartitionStart = NULL;
+
+	protected $sTitle = NULL;
 	
-	private $iTrackCount = NULL;
+	protected $iTrackCount = NULL;
 	
-	private $iSectorCount = NULL;
+	protected $iSectorCount = NULL;
 
-	private $iDiskCount = NULL ; 
+	protected $iDiskCount = NULL ; 
 	
-	private $iSectorsPerTrack = NULL;
+	protected $iSectorsPerTrack = NULL;
 
-	private $iSectorsPerBitMap = NULL;
+	protected $iSectorsPerBitMap = NULL;
 	
-	private $iIncrementToNextDrive = NULL;
+	protected $iIncrementToNextDrive = NULL;
 	
-	private $iRootDirSin = NULL;
+	protected $iRootDirSin = NULL;
 
-	private $iInitData = NULL;
+	protected $iInitData = NULL;
 
-	private $iFirstFreeTrack  = NULL;
+	protected $iFirstFreeTrack  = NULL;
 
-	private $aCatalogue = NULL;
+	protected $aCatalogue = NULL;
 
-	private $bInterleaved = false;
+	protected $bInterleaved = false;
 
 	/**
 	 * Creates a new instance of the reader
@@ -53,31 +58,65 @@ class L3fsReader {
 		$this->_readMetaData();
 	}
 
-	private function _readMetaData()
+	/**
+	 * Reads the details of the disk from the AFS0 info sector
+	*/
+	protected function _readMetaData()
+	{
+		$this->_parseInfoSector($this->_findInfoSector());
+	}
+
+	/**
+	 * Finds a copy of the AFS0 info sector using the pointers in sectors 0 and 1
+	 *
+	 * @return array The info sector as an array of bytes
+	*/
+	protected function _findInfoSector():array
 	{
 
-		$aSector0 = $this->_getSectorAsByteArray(0);
-
-		//Jump to the location (0xF6) where the pointer to the beging of AFS0 is (well its begining +1)
-		$iAFS0Start = $this->_read24BitInt($aSector0,0xF6);
-
-		//Jump to the location of the second pointer (0x1F6) to the beging of AFS0 is (well its begining +1)
-		$aSector1 = $this->_getSectorAsByteArray(1);
-		$iAFS0Start2 = $this->_read24BitInt($aSector1,0xF6);
-
-		//Check both pointer are same
-		/*if($iAFS0Start2!=$iAFS0Start){
-			throw new Exception("First and second pointers to the start of the fileserver partition dont match");
-		}*/
-		$this->iNfsPartitionStart = $iAFS0Start;
-		$aAFSSector = $this->_getSectorAsByteArray($this->iNfsPartitionStart);
+		//Sectors 0 and 1 each hold a pointer (at 0xF6) to a different copy of the AFS0 info sector.
+		//Try the pointer from a sector with a good ADFS checksum first, then fall back to the other.
+		$aGoodChecksum = [];
+		$aBadChecksum = [];
+		foreach([0,1] as $iSector){
+			$aSector = $this->_getSectorAsByteArray($iSector);
+			if(count($aSector)!=self::SECTOR_SIZE){
+				continue;
+			}
+			//Only the low 21 bits are the sector number, the top 3 are used for the drive number
+			$iPointer = $this->_read24BitInt($aSector,0xF6) & 0x1FFFFF;
+			if($this->_adfsChecksum($aSector)==$aSector[0xFF]){
+				$aGoodChecksum[] = $iPointer;
+			}else{
+				$aBadChecksum[] = $iPointer;
+			}
+		}
+		$aCandidates = array_merge($aGoodChecksum,$aBadChecksum);
 
 		//Read first 4 bytes to check the image is acctually a L3 fs
 		//00-03: "AFS0" identifier.
-		$sIdentifyier = $this->_readString($aAFSSector,0x0,4);
-		if($sIdentifyier != "AFS0"){
+		$aAFSSector = NULL;
+		foreach($aCandidates as $iPointer){
+			$aSector = $this->_getSectorAsByteArray($iPointer);
+			if(count($aSector)==self::SECTOR_SIZE AND $this->_readString($aSector,0x0,4)=="AFS0"){
+				$this->iNfsPartitionStart = $iPointer;
+				$aAFSSector = $aSector;
+				break;
+			}
+		}
+		if(is_null($aAFSSector)){
 			throw new Exception("The volume lable is not AFS0 thus this is not a valid LS filesystem");
 		}
+		return $aAFSSector;
+	}
+
+	/**
+	 * Extracts the details of the disk from a copy of the AFS0 info sector
+	 *
+	 * @param array $aAFSSector The info sector as an array of bytes
+	*/
+	protected function _parseInfoSector(array $aAFSSector)
+	{
 		//Read Disk title, the next 16 bytes (0x04)
 		$this->sTitle = $this->_readString($aAFSSector,0x04,16);
 		//14-15: Number of tracks (cylinders) on whole disk.
@@ -92,21 +131,33 @@ class L3fsReader {
 		$this->iSectorsPerBitMap = $aAFSSector[0x1C];
 		//1D : Increment to next drive, usually 0 for only one drive.
 		$this->iIncrementToNextDrive = $aAFSSector[0x1D];
-		//Next bye should be 1
-		//1E : Unused, set to zero.
-		if($aAFSSector[0x1E]!=1){
-			 throw new Exception("Volume head fault, a byte that should be 0 is none 0");
-		}
+		//1E : Increment to next logical drive, usually 1.
 		//1F-21: System Internal Name (SIN) of root directory.
 		$this->iRootDirSin = $this->_read24BitInt($aAFSSector,0x1F);
 		//22-23: Initialisation date in filing system standard date format.
 		$this->iInitData = $this->_read16BitInt($aAFSSector,0x22);
 		//24-25: First free cylinder.
 		$this->iFirstFreeTrack  = $this->_read16BitInt($aAFSSector,0x24);
-		if ($this->iSectorCount % $this->iSectorsPerTrack != 0){
+		if ($this->iSectorsPerTrack == 0 OR $this->iSectorCount % $this->iSectorsPerTrack != 0){
 			throw new Exception("The number of sectors not on an integer number of tracks");
 		}
 
+	}
+
+	/**
+	 * Calculates the ADFS old map checksum of a sector
+	 *
+	 * Used on sectors 0 and 1 only (nothing in the fileserver partition is checksummed), the result should match the last byte of the sector
+	 * @param array $aBytes The sector as an array of bytes
+	 * @return int
+	*/
+	protected function _adfsChecksum(array $aBytes):int
+	{
+		$iSum = 255;
+		for($i=254;$i>=0;$i--){
+			$iSum = ($iSum & 0xFF) + $aBytes[$i] + ($iSum >> 8);
+		}
+		return $iSum & 0xFF;
 	}
 
 	/**
@@ -116,7 +167,7 @@ class L3fsReader {
 	 * @param int $iSector The sector number 
 	 * @return string Binary String 
 	*/
-	private function _getSectorRaw(int $iSector):string 
+	protected function _getSectorRaw(int $iSector):string 
 	{
 		if($this->bInterleaved){
 			$iTrack = floor($iSector/$this->iSectorsPerTrack);
@@ -142,7 +193,7 @@ class L3fsReader {
 	 * @param int $iSector The sector number
 	 * @return array
 	*/
-	private function _getSectorAsByteArray(int $iSector):array
+	protected function _getSectorAsByteArray(int $iSector):array
 	{
 		return array_values(unpack('C*',$this->_getSectorRaw($iSector)));
 	}
@@ -153,7 +204,7 @@ class L3fsReader {
 	 * @param int $iFileHandle
 	 * @return int
 	*/
-	private function _read32BitInt(array $aBytes, int $iStart):int
+	protected function _read32BitInt(array $aBytes, int $iStart):int
 	{
 		return $this->_decode32bitAddr($aBytes[$iStart], $aBytes[$iStart+1], $aBytes[$iStart+2], $aBytes[$iStart+3]);
 
@@ -164,7 +215,7 @@ class L3fsReader {
 	 * @param int $iFileHandle
 	 * @return int
 	*/
-	private function _read24BitInt(array $aBytes, int $iStart):int
+	protected function _read24BitInt(array $aBytes, int $iStart):int
 	{
 		return $this->_decode24bitAddr($aBytes[$iStart],$aBytes[$iStart+1],$aBytes[$iStart+2]);
 
@@ -176,13 +227,13 @@ class L3fsReader {
 	 * @param int $iFileHandle
 	 * @return int
 	*/
-	private function _read16BitInt(array $aBytes, int $iStart):int
+	protected function _read16BitInt(array $aBytes, int $iStart):int
 	{
 		return $this->_decode16bitAddr($aBytes[$iStart],$aBytes[$iStart+1]);
 
 	}	
 
-	private function _readString(array $aBytes, int $iStart, int $iLength):string
+	protected function _readString(array $aBytes, int $iStart, int $iLength):string
 	{
 		$sReturn = "";
 		for($i=0;$i<$iLength;$i++){
@@ -199,7 +250,7 @@ class L3fsReader {
 	 * @param int $iCount
 	 * @return array
 	*/
-	private function _getSectorsAsByteArray(int $iStartSector,int $iCount):array
+	protected function _getSectorsAsByteArray(int $iStartSector,int $iCount):array
 	{
 		if($iCount==0){
 			return [];
@@ -218,7 +269,7 @@ class L3fsReader {
 	 * @param int $iStartSector
 	 * @param int $iCount
 	*/
-	private function _getSectorsRaw(int $iStartSector,int $iCount):string
+	protected function _getSectorsRaw(int $iStartSector,int $iCount):string
 	{
 		if($iCount==0){
 			return "";
@@ -236,7 +287,7 @@ class L3fsReader {
 	 * @param int $iByte (0-255)
 	 * @return int 
 	*/
-	private function _decode7bit(int $iByte):int 
+	protected function _decode7bit(int $iByte):int 
 	{
 		return $iByte & 127;
 	}
@@ -250,7 +301,7 @@ class L3fsReader {
 	 * @param int $iByte4
 	 * @return int
 	*/
-	private function _decode32bitAddr(int $iByte1,int $iByte2,int $iByte3,int $iByte4):int
+	protected function _decode32bitAddr(int $iByte1,int $iByte2,int $iByte3,int $iByte4):int
 	{
 		return ($iByte4 << 24) + ($iByte3 << 16) + ($iByte2 << 8) + $iByte1;
 	}
@@ -263,7 +314,7 @@ class L3fsReader {
 	 * @param int $iByte3
 	 * @return int
 	*/
-	private function _decode24bitAddr(int $iByte1,int $iByte2,int $iByte3):int
+	protected function _decode24bitAddr(int $iByte1,int $iByte2,int $iByte3):int
 	{
 		return ($iByte3 << 16) + ($iByte2 << 8) + $iByte1;
 	}
@@ -275,7 +326,7 @@ class L3fsReader {
 	 * @param int $iByte2
 	 * @return int
 	*/
-	private function _decode16bitAddr(int $iByte1, int $iByte2):int
+	protected function _decode16bitAddr(int $iByte1, int $iByte2):int
 	{
 		return ($iByte2 << 8) + $iByte1;
 	}
@@ -288,7 +339,7 @@ class L3fsReader {
 	 * @param int $iLen
 	 * @return string
 	*/
-	private function getBlocks(int $iStartSector,int $iLen): string
+	protected function getBlocks(int $iStartSector,int $iLen): string
 	{
 		$iSectors = floor($iLen/self::SECTOR_SIZE);
 		$iRemainder = $iLen - $iSectors*self::SECTOR_SIZE;
@@ -299,52 +350,57 @@ class L3fsReader {
 	}
 
 	/**
-	 * Gets all the data from across the disk pointed to by an AllocationMap
+	 * Reads the allocation map (JesMap) for an object, following the chain of map blocks if there is more than one
 	 *
 	 * @param int $iSin System internal name
-	 * @return string
-	*/ 
-	private function _getDataPointedToByAllocationMap(int $iSin)
+	 * @return array In the format array('extents'=>array(array('sector'=>,'count'=>)),'size'=>) where size is in bytes
+	*/
+	protected function _readAllocationMap(int $iSin):array
 	{
-		$iSector = $iSin;
-		$aData = $this->_getSectorsAsByteArray($iSector,1);
-		if("JesMap" != $this->_readString($aData,0x0,6)){
-			throw new Exception("Invalid Allocation Map");
-		}
-		if($aData[0x6]!=$aData[0xff]){
-			throw new Exception("The first and second chain numbers do not match");
-		}
-		$sReturn="";
-		//Every 5 bytes (starting from 0x0A) is a table entry consisitng of sector (3 bytes) and length (2 Bytes)
-
-		//Set the currenty entry in the chain we are
-		$iChainEntry = $aData[0x6];
+		$aExtents = [];
+		$iSectors = 0;
+		$iBytesInLastBlock = 0;
+		$iBlock = $iSin;
 		$iChainCount = 0;
 		while(true){
-			//Check the chain entry read from the disk is correct
-			if($aData[6]!=$iChainEntry){
-				throw new Exception("Expected the next entry in the chain to be ".$iChainEntry." but its numbered ".$aData[6]." in the disk image");
+			$aData = $this->_getSectorAsByteArray($iBlock);
+			if(count($aData)!=self::SECTOR_SIZE){
+				throw new Exception("The allocation map block at sector ".$iBlock." is outside the disk image");
 			}
-			for($i = 0xA; $i<0xFA; $i=$i+5){
-				if($this->_read16BitInt($aData,$i+3)==0){
+			if($iChainCount==0){
+				//Only the first block in a chain carries the identifier and the bytes in last block count
+				if("JesMap" != $this->_readString($aData,0x0,6)){
+					throw new Exception("Invalid Allocation Map");
+				}
+				$iBytesInLastBlock = $this->_read16BitInt($aData,0x8);
+			}
+			//The sequence numbers are per block, a deleted or part written block has them out of step
+			if($aData[0x6]!=$aData[0xff]){
+				throw new Exception("The sequence numbers at 0x6 and 0xff of the allocation map block at sector ".$iBlock." do not match");
+			}
+			//Every 5 bytes (starting from 0x0A) is a table entry consisitng of sector (3 bytes) and length (2 Bytes)
+			$iNextBlock = 0;
+			for($i=0;$i<self::MAP_ENTRIES;$i++){
+				$iOffset = 0xA + ($i*5);
+				$iStart = $this->_read24BitInt($aData,$iOffset);
+				if($iStart==0){
 					//Last entry jump out of the loop
 					break;
 				}
-				$sReturn = $sReturn.$this->_getSectorsRaw($this->_read24BitInt($aData,$i), $this->_read16BitInt($aData,$i+3));
+				if($i==(self::MAP_ENTRIES-1)){
+					//The final entry is never data, its the sector of the next map block
+					$iNextBlock = $iStart;
+					break;
+				}
+				$iCount = $this->_read16BitInt($aData,$iOffset+3);
+				$aExtents[] = ['sector'=>$iStart,'count'=>$iCount];
+				$iSectors = $iSectors+$iCount;
 			}
-			//Check to see if this is the last AlloctionMap in the chain
-			$iNextEntry = $this->_read24BitInt($aData,0xFA);
-			
-			if($iNextEntry == 0){
+			if($iNextBlock == 0){
 				//The map has ended 
 				break;
 			}
-			if($this->_read16BitInt($aData,0xFD)!=1){
-				throw new Exception("The next part of the jsemap is more than 1 sectory, don't know how to handle that");
-			}
-			//Get the next section of the allocation map
-			$aData = $this->_getSectorsAsByteArray($iNextEntry,$this->_read16BitInt($aData,0xFD));
-			$iChainEntry--;
+			$iBlock = $iNextBlock;
 
 			//Check we are not running on forever and that the chain had an end
 			$iChainCount++;
@@ -352,7 +408,34 @@ class L3fsReader {
 				throw new Exception("The chain of allocation map entries has run on too long"); 
 			}
 		}
-		return $sReturn;
+		if($iSectors==0){
+			$iSize = 0;
+		}elseif($iBytesInLastBlock==0){
+			$iSize = $iSectors*self::SECTOR_SIZE;
+		}else{
+			$iSize = (($iSectors-1)*self::SECTOR_SIZE)+$iBytesInLastBlock;
+		}
+		return ['extents'=>$aExtents,'size'=>$iSize];
+	}
+
+	/**
+	 * Gets all the data from across the disk pointed to by an AllocationMap
+	 *
+	 * @param int $iSin System internal name
+	 * @return string
+	*/ 
+	protected function _getDataPointedToByAllocationMap(int $iSin)
+	{
+		$aMap = $this->_readAllocationMap($iSin);
+		$sReturn="";
+		foreach($aMap['extents'] as $aExtent){
+			$sReturn = $sReturn.$this->_getSectorsRaw($aExtent['sector'],$aExtent['count']);
+		}
+		if(strlen($sReturn)<$aMap['size']){
+			throw new Exception("The object with SIN ".$iSin." runs off the end of the disk image");
+		}
+		//The last sector is only part used
+		return substr($sReturn,0,$aMap['size']);
 	}
 
 	/**
@@ -361,56 +444,9 @@ class L3fsReader {
 	 * @param int $iSecotor the sector the maps starts at
 	 * @return int Size in bytes
 	*/
-	private function _getSizeFromAllocationMap(int $iSin):int
+	protected function _getSizeFromAllocationMap(int $iSin):int
 	{
-		$iSector = $iSin ;
-		$aData = $this->_getSectorsAsByteArray($iSector,1);
-		if("JesMap" != $this->_readString($aData,0x0,6)){
-			throw new Exception("Invalid Allocation Map");
-		}
-		if($aData[6]!=0){
-			throw new Exception("Not the first entry in the chain, but we should be");
-		}
-		if($aData[6]!=$aData[0xff]){
-			throw new Exception("The chain sequence numbers at 0x6 and 0xff should match but they do not");
-		}
-		$iReturn  = 0;
-		//Every 5 bytes (starting from 0x0A) is a table entry consisitng of sector (3 bytes) and length (2 Bytes)
-
-		//Set the currenty entry in the chain we are
-		$iChainEntry = 0;
-		while(true){
-			//Check the chain entry read from the disk is correct
-			if($aData[6]!=$iChainEntry){
-				throw new Exception("Expected the next entry in the chain to be ".$iChainEntry." but its numbered ".$aData[6]." in the disk image");
-			}
-			for($i = 0xA; $i<0xFA; $i=$i+5){
-				if($this->_read16BitInt($aData,$i+3)==0){
-					//Last entry jump out of the loop
-					break;
-				}
-				//Add together the secotor count
-				$iReturn = $iReturn+$this->_read16BitInt($aData,$i+3);
-			}
-			//Check to see if this is the last AlloctionMap in the chain
-			$iNextEntry = $this->_read24BitInt($aData,0xFA);
-			if($iNextEntry == 0){
-				//The map has ended 
-				break;
-			}
-			if($this->_read16BitInt($aData,0xFD)!=1){
-				throw new Exception("The next part of the jsemap is more than 1 sectory, don't know how to handle that");
-			}
-			//Get the next section of the allocation map
-			$aData = $this->_getSectorsAsByteArray($iNextEntry,1);
-			$iChainEntry++;
-
-			//Check we are not running on forever and that the chain had an end
-			if($iChainEntry>255){
-				throw new Exception("The chain of allocation map entries has run on too long"); 
-			}
-		}
-		return $iReturn*self::SECTOR_SIZE;
+		return $this->_readAllocationMap($iSin)['size'];
 	}
 
 	/**
@@ -419,7 +455,7 @@ class L3fsReader {
 	 * @param int $iSin System internal name 
 	 * @return array An Array of bytes in the order stored on the disk
 	*/
-	private function _getDataPointedToByAllocationMapAsByteArray(int $iSin):array
+	protected function _getDataPointedToByAllocationMapAsByteArray(int $iSin):array
 	{
 		return array_values(unpack('C*',$this->_getDataPointedToByAllocationMap($iSin)));
 	}
@@ -440,23 +476,34 @@ class L3fsReader {
 		return $this->aCatalogue;
 	}
 
-	private function _getCatalogueStartingAtSector(int $iSin,int $iDepth=0):array
+	protected function _getCatalogueStartingAtSector(int $iSin,int $iDepth=0):array
 	{
 		if($iDepth==255){
-			//return [];
+			throw new Exception("The directory tree is nested too deep, it probably loops back on its self");
 		}
 		$aDirectoryTable = $this->_getDataPointedToByAllocationMapAsByteArray($iSin);
+		$iDirectorySize = count($aDirectoryTable);
+		$iRecordLength = self::METADATA_SIZE;
+		if($iDirectorySize<(self::DIR_HEADER_SIZE+1)){
+			throw new Exception("The directory with SIN ".$iSin." is too short to be a directory");
+		}
+		//The sequence number at 0x2 is repeated in the last byte of the directory, they differ if the directory was not fully written
+		if($aDirectoryTable[0x2]!=$aDirectoryTable[$iDirectorySize-1]){
+			throw new Exception("Broken directory, the sequence numbers at the start and end of the directory with SIN ".$iSin." do not match");
+		}
 		$iEntryCount = $this->_read16BitInt($aDirectoryTable,0x0f);
 		$iEntryPointer = $this->_read16BitInt($aDirectoryTable,0x0);
 		$sCurrentDir = $this->_readString($aDirectoryTable,0x3,10);
 		$aCat=[];
-		//The real first entry in the table is 0x11 but that the parent directory and this code will go every wrong is we examine that entry
-		$iFirstEntry = 0x11;
-		$iRecordLength = 0x1a;
+		//The entry at 0x11 can be an unchained dummy entry holding the SIN of the parent directory, as it is not in the chain its never examined here
 		//Step through every entry
 		for($i=0;$i<$iEntryCount;$i++){
 			if($iEntryPointer == 0){
 				break;
+			}
+			//Entries are at fixed positions and must fit before the trailing sequence number
+			if($iEntryPointer<self::DIR_HEADER_SIZE OR (($iEntryPointer-self::DIR_HEADER_SIZE) % $iRecordLength)!=0 OR ($iEntryPointer+$iRecordLength)>($iDirectorySize-1)){
+				throw new Exception("Invalid ptr to a directory entry (".$iEntryPointer.") in the directory with SIN ".$iSin);
 			}
 			$aEntry = $this->_readDirectoryEntry(array_slice($aDirectoryTable, $iEntryPointer, $iRecordLength));
 
@@ -474,18 +521,15 @@ class L3fsReader {
 					throw new Exception("Invalid ptr to next for final directory entry");
 				}
 			}
-			//If the next entry is larger that the directory table quietly drop out. 
-			if($aEntry['next']>count($aDirectoryTable)){
-				break;
-			}
 		}
 		return $aCat;
 	}
 
-	function _readDirectoryEntry(array $aData):array
+	protected function _readDirectoryEntry(array $aData):array
 	{
 		$aReturn = [];
-		$aReturn['filename'] = trim($this->_readString($aData,0x2,10));
+		//Names are padded with spaces (occasionally nulls)
+		$aReturn['filename'] = rtrim($this->_readString($aData,0x2,10)," \0");
 		$aReturn['load'] = $this->_read32BitInt($aData,0xC);
 		$aReturn['exec'] = $this->_read32BitInt($aData,0x10);
 		$aReturn['access'] = $aData[0x14];
@@ -499,8 +543,8 @@ class L3fsReader {
 		$aReturn['locked'] = $aData[0x14] & 16;
 		$aReturn['user_read'] = $aData[0x14] & 4;
 		$aReturn['user_write'] = $aData[0x14] & 8;
-		$aReturn['public_read'] = $aData[0x14] & 2;
-		$aReturn['public_write'] = $aData[0x14] & 1;
+		$aReturn['public_read'] = $aData[0x14] & 1;
+		$aReturn['public_write'] = $aData[0x14] & 2;
 		$aReturn['next'] = $this->_read16BitInt($aData, 0x0);
 		if($aReturn['type'] == 'file'){
 			try {
@@ -542,6 +586,18 @@ class L3fsReader {
 				}
 			}
 		}
+		throw new Exception("File not found ".$sFileName);
+	}
+
+	/**
+	 * Gets the contents of an object given its SIN (the 'sector' value of its entry in the catalogue)
+	 *
+	 * @param int $iSin System internal name
+	 * @return string
+	*/
+	public function getFileBySin(int $iSin):string
+	{
+		return $this->_getDataPointedToByAllocationMap($iSin);
 	}
 
 	/**
@@ -568,10 +624,11 @@ class L3fsReader {
 					return array('size'=>$aCat[$sTestKey]['size'],'sector'=>$aCat[$sTestKey]['sector']);
 				}
 				if($aCat[$sTestKey]['type']=='dir'){
-					$aCat = $aCat[$sTestKey];
+					$aCat = $aCat[$sTestKey]['dir'];
 				}
 			}
 		}
+		throw new Exception("File not found ".$sFileName);
 	}
 
 	/**
